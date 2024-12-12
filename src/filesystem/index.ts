@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-// import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -15,8 +14,6 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
-import express from 'express';
-import cors from 'cors';
 
 // Command line argument parsing
 const args = process.argv.slice(2);
@@ -582,33 +579,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // Start server
 async function runServer() {
-  const app = express();
-  app.use(cors());
-  
-  // Create SSE endpoint
-  app.get('/message', (req: any, res: any) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    
-    const transport = new SSEServerTransport("/message", res);
-    server.connect(transport).catch((error) => {
-      console.error("Error connecting transport:", error);
-      res.end();
-    });
-    
-    // Handle client disconnect
-    req.on('close', () => {
-      server.disconnect().catch(console.error);
-    });
-  });
-
-  // Start HTTP server
-  const PORT = process.env.PORT || 3030;
-  app.listen(PORT, () => {
-    console.error(`Secure MCP Filesystem Server running on http://localhost:${PORT}`);
-    console.error("Allowed directories:", allowedDirectories);
-  });
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("Secure MCP Filesystem Server running on stdio");
+  console.error("Allowed directories:", allowedDirectories);
 }
 
 runServer().catch((error) => {
