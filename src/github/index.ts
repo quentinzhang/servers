@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
+  JSONRPCMessage,
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import fetch from "node-fetch";
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import express from "express";
 import {
   CreateBranchOptionsSchema,
   CreateBranchSchema,
@@ -60,6 +62,15 @@ import {
   type SearchIssuesResponse,
   type SearchUsersResponse
 } from './schemas.js';
+
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const app = express();
+app.use(express.json());
+
+const PORT = process.env.PORT || 8808;
 
 const server = new Server(
   {
@@ -706,7 +717,7 @@ async function getIssue(
         "User-Agent": "github-mcp-server",
       },
     }
-);
+  );
 
   if (!response.ok) {
     throw new Error(`Github API error: ${response.statusText}`);
@@ -1029,10 +1040,49 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-async function runServer() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("GitHub MCP Server running on stdio");
+export async function runServer() {
+  let transport: SSEServerTransport;
+
+  app.get("/sse", async (req, res) => {
+    console.log("--> Received connection:", req.url);
+    transport = new SSEServerTransport("/message", res);
+    console.log("New SSE connection.");
+    await server.connect(transport);
+    const _onMsg = transport.onmessage; // original hook
+    const _onClose = transport.onclose;
+    const _onErr = transport.onerror;
+    transport.onmessage = (msg: JSONRPCMessage) => {
+      console.log(msg);
+      if (_onMsg) _onMsg(msg);
+    };
+    transport.onclose = () => {
+      console.log("Transport closed.");
+      if (_onClose) _onClose();
+    };
+    transport.onerror = (err) => {
+      console.error(err);
+      if (_onErr) _onErr(err);
+    };
+    server.onclose = async () => {
+      //clearInterval(updateInterval);
+      await server.close();
+      console.log("SSE connection closed.");
+    };
+  });
+
+  app.post("/message", async (req, res) => {
+    console.log("--> Received message (post)");
+    if (transport?.handlePostMessage) {
+      await transport.handlePostMessage(req, res);
+    } else {
+      console.error("transport.handlePostMessage UNDEFINED!");
+    }
+    console.log("<--", res.statusCode, res.statusMessage);
+  });
+
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
 }
 
 runServer().catch((error) => {
