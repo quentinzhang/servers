@@ -8,9 +8,18 @@ import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.shared.exceptions import McpError
-import mcp.server.stdio
+from mcp.server.sse import SseServerTransport
+from starlette.applications import Starlette
+from starlette.routing import Route
 
-SENTRY_API_BASE = "https://sentry.io/api/0/"
+import logging
+from starlette.responses import Response
+import uvicorn
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+SENTRY_API_BASE = "https://sentry.io/api/0/organizations/4507315210616832/"
 MISSING_AUTH_TOKEN_MESSAGE = (
     """Sentry authentication token not found. Please specify your Sentry auth token."""
 )
@@ -188,11 +197,25 @@ async def handle_sentry_issue(
         raise McpError(f"An error occurred: {str(e)}")
 
 
-async def serve(auth_token: str) -> Server:
-    server = Server("sentry")
+def serve(default_auth_token: str | None = None) -> None:
+    """Run the Sentry MCP server with SSE transport."""
+    app = Server("sentry")
     http_client = httpx.AsyncClient(base_url=SENTRY_API_BASE)
+    current_auth_token = None  # 存储当前会话的 token
 
-    @server.list_prompts()
+    async def get_auth_token(request) -> str:
+        """Get auth token from request params or default value"""
+        nonlocal current_auth_token
+        if current_auth_token:
+            return current_auth_token
+            
+        auth_token = request.query_params.get("auth_token", default_auth_token)
+        if not auth_token:
+            raise McpError(MISSING_AUTH_TOKEN_MESSAGE)
+        current_auth_token = auth_token  # 保存 token
+        return auth_token
+
+    @app.list_prompts()
     async def handle_list_prompts() -> list[types.Prompt]:
         return [
             types.Prompt(
@@ -208,18 +231,23 @@ async def serve(auth_token: str) -> Server:
             )
         ]
 
-    @server.get_prompt()
+    @app.get_prompt()
     async def handle_get_prompt(
         name: str, arguments: dict[str, str] | None
     ) -> types.GetPromptResult:
+        nonlocal current_auth_token  # 使用当前会话的 token
+        
         if name != "sentry-issue":
             raise ValueError(f"Unknown prompt: {name}")
 
+        if not current_auth_token:
+            raise McpError(MISSING_AUTH_TOKEN_MESSAGE)
+
         issue_id_or_url = (arguments or {}).get("issue_id_or_url", "")
-        issue_data = await handle_sentry_issue(http_client, auth_token, issue_id_or_url)
+        issue_data = await handle_sentry_issue(http_client, current_auth_token, issue_id_or_url)
         return issue_data.to_prompt_result()
 
-    @server.list_tools()
+    @app.list_tools()
     async def handle_list_tools() -> list[types.Tool]:
         return [
             types.Tool(
@@ -243,43 +271,91 @@ async def serve(auth_token: str) -> Server:
             )
         ]
 
-    @server.call_tool()
+    @app.call_tool()
     async def handle_call_tool(
         name: str, arguments: dict | None
     ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+        nonlocal current_auth_token  # 使用当前会话的 token
+        
         if name != "get_sentry_issue":
             raise ValueError(f"Unknown tool: {name}")
 
         if not arguments or "issue_id_or_url" not in arguments:
             raise ValueError("Missing issue_id_or_url argument")
 
-        issue_data = await handle_sentry_issue(http_client, auth_token, arguments["issue_id_or_url"])
+        if not current_auth_token:
+            raise McpError(MISSING_AUTH_TOKEN_MESSAGE)
+
+        issue_data = await handle_sentry_issue(
+            http_client, 
+            current_auth_token,  # 使用当前会话的 token
+            arguments["issue_id_or_url"]
+        )
         return issue_data.to_tool_result()
 
-    return server
+    # 创建 SSE 传输实例
+    sse = SseServerTransport("/messages")
+
+    async def handle_sse(request):
+        """Handle SSE connection requests"""
+        try:
+            # 在 SSE 连接时获取并保存 token
+            await get_auth_token(request)
+            
+            async with sse.connect_sse(
+                request.scope, request.receive, request._send
+            ) as streams:
+                await app.run(
+                    streams[0],
+                    streams[1],
+                    InitializationOptions(
+                        server_name="sentry",
+                        server_version="0.4.1",
+                        capabilities=app.get_capabilities(
+                            notification_options=NotificationOptions(),
+                            experimental_capabilities={},
+                        ),
+                    ),
+                )
+        except Exception as e:
+            logger.exception("Error in SSE connection")
+            return Response(status_code=401, content=str(e))
+
+    async def handle_messages(request):
+        """Handle incoming messages"""
+        logger.debug(f"Handling message request: {request.url}")
+        try:
+            await sse.handle_post_message(
+                scope=request.scope,
+                receive=request.receive,
+                send=request._send
+            )
+            
+        except Exception as e:
+            logger.exception("Error handling message")
+            return Response(status_code=500, content=str(e))
+
+    # 创建 Starlette 应用
+    starlette_app = Starlette(
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages", endpoint=handle_messages, methods=["POST"]),
+        ]
+    )
+
+    # 运行服务器
+    uvicorn.run(starlette_app, host="0.0.0.0", port=8200, log_level="debug")
+
 
 @click.command()
 @click.option(
     "--auth-token",
     envvar="SENTRY_TOKEN",
-    required=True,
-    help="Sentry authentication token",
+    help="Default Sentry authentication token (can be overridden by request params)",
 )
-def main(auth_token: str):
-    async def _run():
-        async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-            server = await serve(auth_token)
-            await server.run(
-                read_stream,
-                write_stream,
-                InitializationOptions(
-                    server_name="sentry",
-                    server_version="0.4.1",
-                    capabilities=server.get_capabilities(
-                        notification_options=NotificationOptions(),
-                        experimental_capabilities={},
-                    ),
-                ),
-            )
+def main(auth_token: str | None = None):
+    """Entry point for the Sentry MCP server"""
+    asyncio.run(serve(auth_token))
 
-    asyncio.run(_run())
+# Make serve available for import
+__all__ = ['serve']

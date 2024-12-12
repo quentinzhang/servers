@@ -2,6 +2,7 @@ from typing import Annotated, Tuple
 from urllib.parse import urlparse, urlunparse
 
 import markdownify
+import uvicorn
 import readabilipy.simple_json
 from mcp.shared.exceptions import McpError
 from mcp.server import Server
@@ -21,6 +22,12 @@ from mcp.types import (
 )
 from protego import Protego
 from pydantic import BaseModel, Field, AnyUrl
+
+import logging
+from starlette.responses import Response
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 DEFAULT_USER_AGENT_AUTONOMOUS = "ModelContextProtocol/1.0 (Autonomous; +https://github.com/modelcontextprotocol/servers)"
 DEFAULT_USER_AGENT_MANUAL = "ModelContextProtocol/1.0 (User-Specified; +https://github.com/modelcontextprotocol/servers)"
@@ -182,11 +189,10 @@ class Fetch(BaseModel):
     ]
 
 
-def main(
+def serve(
     custom_user_agent: str | None = None,
     ignore_robots_txt: bool = False,
 ) -> None:
-
     """Run the fetch MCP server.
 
     Args:
@@ -274,13 +280,34 @@ Although originally you did not have internet access, and were advised to refuse
             ],
         )
 
-    options = app.create_initialization_options()
-    async def handle_sse(scope, receive, send):
-        async with sse.connect_sse(scope, receive, send) as streams:
-            await app.run(streams[0], streams[1], app.create_initialization_options())
+    # async def handle_sse(scope, receive, send):
+    #     async with sse.connect_sse(scope, receive, send) as streams:
+    #         await app.run(streams[0], streams[1], app.create_initialization_options())
 
-    async def handle_messages(scope, receive, send):
-        await sse.handle_post_message(scope, receive, send)
+    async def handle_sse(request):
+        async with sse.connect_sse(
+                request.scope, request.receive, request._send
+        ) as streams:
+            await app.run(
+                streams[0], streams[1], app.create_initialization_options()
+            )
+
+    # async def handle_messages(scope, receive, send):
+    #     await sse.handle_post_message(scope, receive, send)
+
+    async def handle_messages(request):
+        logger.debug(f"Handling message request: {request.url}")
+        try:
+            # 直接处理消息，不返回新的响应
+            await sse.handle_post_message(
+                scope=request.scope,
+                receive=request.receive,
+                send=request._send
+            )
+            
+        except Exception as e:
+            logger.exception("Error handling message")
+            return Response(status_code=500, content=str(e))
 
     starlette_app = Starlette(
         routes=[
@@ -291,5 +318,5 @@ Although originally you did not have internet access, and were advised to refuse
 
     uvicorn.run(starlette_app, host="0.0.0.0", port=8100, log_level="debug")
 
-if __name__ == "__main__":
-    main()
+# Make serve available for import
+__all__ = ['serve']
