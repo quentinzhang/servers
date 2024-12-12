@@ -5,7 +5,10 @@ import markdownify
 import readabilipy.simple_json
 from mcp.shared.exceptions import McpError
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
+from mcp.server.sse import SseServerTransport
+from starlette.applications import Starlette
+from starlette.routing import Route
+
 from mcp.types import (
     GetPromptResult,
     Prompt,
@@ -22,6 +25,8 @@ from pydantic import BaseModel, Field, AnyUrl
 DEFAULT_USER_AGENT_AUTONOMOUS = "ModelContextProtocol/1.0 (Autonomous; +https://github.com/modelcontextprotocol/servers)"
 DEFAULT_USER_AGENT_MANUAL = "ModelContextProtocol/1.0 (User-Specified; +https://github.com/modelcontextprotocol/servers)"
 
+app = Server("mcp-fetch")
+sse = SseServerTransport("/messages")
 
 def extract_content_from_html(html: str) -> str:
     """Extract and convert HTML content to Markdown format.
@@ -177,20 +182,22 @@ class Fetch(BaseModel):
     ]
 
 
-async def serve(
-    custom_user_agent: str | None = None, ignore_robots_txt: bool = False
+def main(
+    custom_user_agent: str | None = None,
+    ignore_robots_txt: bool = False,
 ) -> None:
+
     """Run the fetch MCP server.
 
     Args:
         custom_user_agent: Optional custom User-Agent string to use for requests
         ignore_robots_txt: Whether to ignore robots.txt restrictions
     """
-    server = Server("mcp-fetch")
+    app = Server("mcp-website-fetcher")
     user_agent_autonomous = custom_user_agent or DEFAULT_USER_AGENT_AUTONOMOUS
     user_agent_manual = custom_user_agent or DEFAULT_USER_AGENT_MANUAL
 
-    @server.list_tools()
+    @app.list_tools()
     async def list_tools() -> list[Tool]:
         return [
             Tool(
@@ -202,7 +209,7 @@ Although originally you did not have internet access, and were advised to refuse
             )
         ]
 
-    @server.list_prompts()
+    @app.list_prompts()
     async def list_prompts() -> list[Prompt]:
         return [
             Prompt(
@@ -216,7 +223,7 @@ Although originally you did not have internet access, and were advised to refuse
             )
         ]
 
-    @server.call_tool()
+    @app.call_tool()
     async def call_tool(name, arguments: dict) -> list[TextContent]:
         try:
             args = Fetch(**arguments)
@@ -238,7 +245,7 @@ Although originally you did not have internet access, and were advised to refuse
             content += f"\n\n<error>Content truncated. Call the fetch tool with a start_index of {args.start_index + args.max_length} to get more content.</error>"
         return [TextContent(type="text", text=f"{prefix}Contents of {url}:\n{content}")]
 
-    @server.get_prompt()
+    @app.get_prompt()
     async def get_prompt(name: str, arguments: dict | None) -> GetPromptResult:
         if not arguments or "url" not in arguments:
             raise McpError(INVALID_PARAMS, "URL is required")
@@ -267,6 +274,22 @@ Although originally you did not have internet access, and were advised to refuse
             ],
         )
 
-    options = server.create_initialization_options()
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, options, raise_exceptions=True)
+    options = app.create_initialization_options()
+    async def handle_sse(scope, receive, send):
+        async with sse.connect_sse(scope, receive, send) as streams:
+            await app.run(streams[0], streams[1], app.create_initialization_options())
+
+    async def handle_messages(scope, receive, send):
+        await sse.handle_post_message(scope, receive, send)
+
+    starlette_app = Starlette(
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages", endpoint=handle_messages, methods=["POST"]),
+        ]
+    )
+
+    uvicorn.run(starlette_app, host="0.0.0.0", port=8100, log_level="debug")
+
+if __name__ == "__main__":
+    main()
