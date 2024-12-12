@@ -63,14 +63,10 @@ import {
   type SearchUsersResponse
 } from './schemas.js';
 
-import dotenv from 'dotenv';
-
-dotenv.config();
-
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 8808;
+const PORT = 8808;
 
 const server = new Server(
   {
@@ -84,17 +80,11 @@ const server = new Server(
   }
 );
 
-const GITHUB_PERSONAL_ACCESS_TOKEN = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
-
-if (!GITHUB_PERSONAL_ACCESS_TOKEN) {
-  console.error("GITHUB_PERSONAL_ACCESS_TOKEN environment variable is not set");
-  process.exit(1);
-}
-
 async function forkRepository(
   owner: string,
   repo: string,
-  organization?: string
+  organization: string | undefined,
+  token: string,
 ): Promise<GitHubFork> {
   const url = organization
     ? `https://api.github.com/repos/${owner}/${repo}/forks?organization=${organization}`
@@ -103,7 +93,7 @@ async function forkRepository(
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+      Authorization: `token ${token}`,
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "github-mcp-server",
     },
@@ -119,7 +109,8 @@ async function forkRepository(
 async function createBranch(
   owner: string,
   repo: string,
-  options: z.infer<typeof CreateBranchOptionsSchema>
+  options: z.infer<typeof CreateBranchOptionsSchema>,
+  token: string,
 ): Promise<GitHubReference> {
   const fullRef = `refs/heads/${options.ref}`;
 
@@ -128,7 +119,7 @@ async function createBranch(
     {
       method: "POST",
       headers: {
-        Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        Authorization: `token ${token}`,
         Accept: "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
         "Content-Type": "application/json",
@@ -149,13 +140,14 @@ async function createBranch(
 
 async function getDefaultBranchSHA(
   owner: string,
-  repo: string
+  repo: string,
+  token: string
 ): Promise<string> {
   const response = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/main`,
     {
       headers: {
-        Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        Authorization: `token ${token}`,
         Accept: "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
       },
@@ -167,7 +159,7 @@ async function getDefaultBranchSHA(
       `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/master`,
       {
         headers: {
-          Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+          Authorization: `token ${token}`,
           Accept: "application/vnd.github.v3+json",
           "User-Agent": "github-mcp-server",
         },
@@ -192,7 +184,8 @@ async function getFileContents(
   owner: string,
   repo: string,
   path: string,
-  branch?: string
+  branch: string | undefined,
+  token: string
 ): Promise<GitHubContent> {
   let url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
   if (branch) {
@@ -201,7 +194,7 @@ async function getFileContents(
 
   const response = await fetch(url, {
     headers: {
-      Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+      Authorization: `token ${token}`,
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "github-mcp-server",
     },
@@ -224,14 +217,15 @@ async function getFileContents(
 async function createIssue(
   owner: string,
   repo: string,
-  options: z.infer<typeof CreateIssueOptionsSchema>
+  options: z.infer<typeof CreateIssueOptionsSchema>,
+  token: string,
 ): Promise<GitHubIssue> {
   const response = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/issues`,
     {
       method: "POST",
       headers: {
-        Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        Authorization: `token ${token}`,
         Accept: "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
         "Content-Type": "application/json",
@@ -250,14 +244,15 @@ async function createIssue(
 async function createPullRequest(
   owner: string,
   repo: string,
-  options: z.infer<typeof CreatePullRequestOptionsSchema>
+  options: z.infer<typeof CreatePullRequestOptionsSchema>,
+  token: string
 ): Promise<GitHubPullRequest> {
   const response = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/pulls`,
     {
       method: "POST",
       headers: {
-        Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        Authorization: `token ${token}`,
         Accept: "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
         "Content-Type": "application/json",
@@ -280,14 +275,15 @@ async function createOrUpdateFile(
   content: string,
   message: string,
   branch: string,
-  sha?: string
+  sha: string | undefined,
+  token: string,
 ): Promise<GitHubCreateUpdateFileResponse> {
   const encodedContent = Buffer.from(content).toString("base64");
 
   let currentSha = sha;
   if (!currentSha) {
     try {
-      const existingFile = await getFileContents(owner, repo, path, branch);
+      const existingFile = await getFileContents(owner, repo, path, branch, token);
       if (!Array.isArray(existingFile)) {
         currentSha = existingFile.sha;
       }
@@ -310,7 +306,7 @@ async function createOrUpdateFile(
   const response = await fetch(url, {
     method: "PUT",
     headers: {
-      Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+      Authorization: `token ${token}`,
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "github-mcp-server",
       "Content-Type": "application/json",
@@ -329,7 +325,8 @@ async function createTree(
   owner: string,
   repo: string,
   files: FileOperation[],
-  baseTree?: string
+  baseTree: string,
+  token: string
 ): Promise<GitHubTree> {
   const tree = files.map((file) => ({
     path: file.path,
@@ -343,7 +340,7 @@ async function createTree(
     {
       method: "POST",
       headers: {
-        Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        Authorization: `token ${token}`,
         Accept: "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
         "Content-Type": "application/json",
@@ -367,14 +364,15 @@ async function createCommit(
   repo: string,
   message: string,
   tree: string,
-  parents: string[]
+  parents: string[],
+  token: string
 ): Promise<GitHubCommit> {
   const response = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/commits`,
     {
       method: "POST",
       headers: {
-        Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        Authorization: `token ${token}`,
         Accept: "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
         "Content-Type": "application/json",
@@ -398,14 +396,15 @@ async function updateReference(
   owner: string,
   repo: string,
   ref: string,
-  sha: string
+  sha: string,
+  token: string
 ): Promise<GitHubReference> {
   const response = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/refs/${ref}`,
     {
       method: "PATCH",
       headers: {
-        Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        Authorization: `token ${token}`,
         Accept: "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
         "Content-Type": "application/json",
@@ -429,13 +428,14 @@ async function pushFiles(
   repo: string,
   branch: string,
   files: FileOperation[],
-  message: string
+  message: string,
+  token: string
 ): Promise<GitHubReference> {
   const refResponse = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branch}`,
     {
       headers: {
-        Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        Authorization: `token ${token}`,
         Accept: "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
       },
@@ -449,17 +449,18 @@ async function pushFiles(
   const ref = GitHubReferenceSchema.parse(await refResponse.json());
   const commitSha = ref.object.sha;
 
-  const tree = await createTree(owner, repo, files, commitSha);
+  const tree = await createTree(owner, repo, files, commitSha, token);
   const commit = await createCommit(owner, repo, message, tree.sha, [
     commitSha,
-  ]);
-  return await updateReference(owner, repo, `heads/${branch}`, commit.sha);
+  ], token);
+  return await updateReference(owner, repo, `heads/${branch}`, commit.sha, token);
 }
 
 async function searchRepositories(
   query: string,
   page: number = 1,
-  perPage: number = 30
+  perPage: number = 30,
+  token: string
 ): Promise<GitHubSearchResponse> {
   const url = new URL("https://api.github.com/search/repositories");
   url.searchParams.append("q", query);
@@ -468,7 +469,7 @@ async function searchRepositories(
 
   const response = await fetch(url.toString(), {
     headers: {
-      Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+      Authorization: `token ${token}`,
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "github-mcp-server",
     },
@@ -482,12 +483,13 @@ async function searchRepositories(
 }
 
 async function createRepository(
-  options: z.infer<typeof CreateRepositoryOptionsSchema>
+  options: z.infer<typeof CreateRepositoryOptionsSchema>,
+  token: string
 ): Promise<GitHubRepository> {
   const response = await fetch("https://api.github.com/user/repos", {
     method: "POST",
     headers: {
-      Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+      Authorization: `token ${token}`,
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "github-mcp-server",
       "Content-Type": "application/json",
@@ -507,7 +509,8 @@ async function listCommits(
   repo: string,
   page: number = 1,
   perPage: number = 30,
-  sha?: string,
+  sha: string | undefined,
+  token: string
 ): Promise<GitHubListCommits> {
   const url = new URL(`https://api.github.com/repos/${owner}/${repo}/commits`);
   url.searchParams.append("page", page.toString());
@@ -521,7 +524,7 @@ async function listCommits(
     {
       method: "GET",
       headers: {
-        "Authorization": `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        "Authorization": `token ${token}`,
         "Accept": "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
         "Content-Type": "application/json"
@@ -539,7 +542,8 @@ async function listCommits(
 async function listIssues(
   owner: string,
   repo: string,
-  options: Omit<z.infer<typeof ListIssuesOptionsSchema>, 'owner' | 'repo'>
+  options: Omit<z.infer<typeof ListIssuesOptionsSchema>, 'owner' | 'repo'>,
+  token: string
 ): Promise<GitHubIssue[]> {
   const url = new URL(`https://api.github.com/repos/${owner}/${repo}/issues`);
 
@@ -554,7 +558,7 @@ async function listIssues(
 
   const response = await fetch(url.toString(), {
     headers: {
-      "Authorization": `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+      "Authorization": `token ${token}`,
       "Accept": "application/vnd.github.v3+json",
       "User-Agent": "github-mcp-server"
     }
@@ -571,14 +575,15 @@ async function updateIssue(
   owner: string,
   repo: string,
   issueNumber: number,
-  options: Omit<z.infer<typeof UpdateIssueOptionsSchema>, 'owner' | 'repo' | 'issue_number'>
+  options: Omit<z.infer<typeof UpdateIssueOptionsSchema>, 'owner' | 'repo' | 'issue_number'>,
+  token: string
 ): Promise<GitHubIssue> {
   const response = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}`,
     {
       method: "PATCH",
       headers: {
-        "Authorization": `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        "Authorization": `token ${token}`,
         "Accept": "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
         "Content-Type": "application/json"
@@ -605,14 +610,15 @@ async function addIssueComment(
   owner: string,
   repo: string,
   issueNumber: number,
-  body: string
+  body: string,
+  token: string
 ): Promise<z.infer<typeof IssueCommentSchema>> {
   const response = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
     {
       method: "POST",
       headers: {
-        "Authorization": `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        "Authorization": `token ${token}`,
         "Accept": "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
         "Content-Type": "application/json"
@@ -629,7 +635,8 @@ async function addIssueComment(
 }
 
 async function searchCode(
-  params: z.infer<typeof SearchCodeSchema>
+  params: z.infer<typeof SearchCodeSchema>,
+  token: string
 ): Promise<SearchCodeResponse> {
   const url = new URL("https://api.github.com/search/code");
   Object.entries(params).forEach(([key, value]) => {
@@ -640,7 +647,7 @@ async function searchCode(
 
   const response = await fetch(url.toString(), {
     headers: {
-      Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+      Authorization: `token ${token}`,
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "github-mcp-server",
     },
@@ -654,7 +661,8 @@ async function searchCode(
 }
 
 async function searchIssues(
-  params: z.infer<typeof SearchIssuesSchema>
+  params: z.infer<typeof SearchIssuesSchema>,
+  token: string
 ): Promise<SearchIssuesResponse> {
   const url = new URL("https://api.github.com/search/issues");
   Object.entries(params).forEach(([key, value]) => {
@@ -665,7 +673,7 @@ async function searchIssues(
 
   const response = await fetch(url.toString(), {
     headers: {
-      Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+      Authorization: `token ${token}`,
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "github-mcp-server",
     },
@@ -679,7 +687,8 @@ async function searchIssues(
 }
 
 async function searchUsers(
-  params: z.infer<typeof SearchUsersSchema>
+  params: z.infer<typeof SearchUsersSchema>,
+  token: string
 ): Promise<SearchUsersResponse> {
   const url = new URL("https://api.github.com/search/users");
   Object.entries(params).forEach(([key, value]) => {
@@ -690,7 +699,7 @@ async function searchUsers(
 
   const response = await fetch(url.toString(), {
     headers: {
-      Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+      Authorization: `token ${token}`,
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "github-mcp-server",
     },
@@ -706,13 +715,14 @@ async function searchUsers(
 async function getIssue(
   owner: string,
   repo: string,
-  issueNumber: number
+  issueNumber: number,
+  token: string
 ): Promise<GitHubIssue> {
   const response = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}`,
     {
       headers: {
-        Authorization: `token ${GITHUB_PERSONAL_ACCESS_TOKEN}`,
+        Authorization: `token ${token}`,
         Accept: "application/vnd.github.v3+json",
         "User-Agent": "github-mcp-server",
       },
@@ -822,10 +832,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request, transport: any) => {
   try {
     if (!request.params.arguments) {
       throw new Error("Arguments are required");
+    }
+
+    // 获取当前连接的 GitHub 令牌
+    const GITHUB_PERSONAL_ACCESS_TOKEN = transport?.githubToken;
+    if (!GITHUB_PERSONAL_ACCESS_TOKEN) {
+      throw new Error("GitHub token is not provided");
     }
 
     switch (request.params.name) {
@@ -834,7 +850,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const fork = await forkRepository(
           args.owner,
           args.repo,
-          args.organization
+          args.organization,
+          GITHUB_PERSONAL_ACCESS_TOKEN,
         );
         return {
           content: [{ type: "text", text: JSON.stringify(fork, null, 2) }],
@@ -863,13 +880,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const data = GitHubReferenceSchema.parse(await response.json());
           sha = data.object.sha;
         } else {
-          sha = await getDefaultBranchSHA(args.owner, args.repo);
+          sha = await getDefaultBranchSHA(args.owner, args.repo, GITHUB_PERSONAL_ACCESS_TOKEN);
         }
 
         const branch = await createBranch(args.owner, args.repo, {
           ref: args.branch,
           sha,
-        });
+        }, GITHUB_PERSONAL_ACCESS_TOKEN);
 
         return {
           content: [{ type: "text", text: JSON.stringify(branch, null, 2) }],
@@ -881,7 +898,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const results = await searchRepositories(
           args.query,
           args.page,
-          args.perPage
+          args.perPage,
+          GITHUB_PERSONAL_ACCESS_TOKEN
         );
         return {
           content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
@@ -890,7 +908,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "create_repository": {
         const args = CreateRepositorySchema.parse(request.params.arguments);
-        const repository = await createRepository(args);
+        const repository = await createRepository(args, GITHUB_PERSONAL_ACCESS_TOKEN);
         return {
           content: [
             { type: "text", text: JSON.stringify(repository, null, 2) },
@@ -904,7 +922,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args.owner,
           args.repo,
           args.path,
-          args.branch
+          args.branch,
+          GITHUB_PERSONAL_ACCESS_TOKEN
         );
         return {
           content: [{ type: "text", text: JSON.stringify(contents, null, 2) }],
@@ -920,7 +939,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args.content,
           args.message,
           args.branch,
-          args.sha
+          args.sha,
+          GITHUB_PERSONAL_ACCESS_TOKEN
         );
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -934,7 +954,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args.repo,
           args.branch,
           args.files,
-          args.message
+          args.message,
+          GITHUB_PERSONAL_ACCESS_TOKEN
         );
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -944,7 +965,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "create_issue": {
         const args = CreateIssueSchema.parse(request.params.arguments);
         const { owner, repo, ...options } = args;
-        const issue = await createIssue(owner, repo, options);
+        const issue = await createIssue(owner, repo, options, GITHUB_PERSONAL_ACCESS_TOKEN);
         return {
           content: [{ type: "text", text: JSON.stringify(issue, null, 2) }],
         };
@@ -953,7 +974,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "create_pull_request": {
         const args = CreatePullRequestSchema.parse(request.params.arguments);
         const { owner, repo, ...options } = args;
-        const pullRequest = await createPullRequest(owner, repo, options);
+        const pullRequest = await createPullRequest(owner, repo, options, GITHUB_PERSONAL_ACCESS_TOKEN);
         return {
           content: [
             { type: "text", text: JSON.stringify(pullRequest, null, 2) },
@@ -963,7 +984,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "search_code": {
         const args = SearchCodeSchema.parse(request.params.arguments);
-        const results = await searchCode(args);
+        const results = await searchCode(args, GITHUB_PERSONAL_ACCESS_TOKEN);
         return {
           content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
         };
@@ -971,7 +992,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "search_issues": {
         const args = SearchIssuesSchema.parse(request.params.arguments);
-        const results = await searchIssues(args);
+        const results = await searchIssues(args, GITHUB_PERSONAL_ACCESS_TOKEN);
         return {
           content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
         };
@@ -979,7 +1000,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "search_users": {
         const args = SearchUsersSchema.parse(request.params.arguments);
-        const results = await searchUsers(args);
+        const results = await searchUsers(args, GITHUB_PERSONAL_ACCESS_TOKEN);
         return {
           content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
         };
@@ -988,27 +1009,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "list_issues": {
         const args = ListIssuesOptionsSchema.parse(request.params.arguments);
         const { owner, repo, ...options } = args;
-        const issues = await listIssues(owner, repo, options);
+        const issues = await listIssues(owner, repo, options, GITHUB_PERSONAL_ACCESS_TOKEN);
         return { toolResult: issues };
       }
 
       case "update_issue": {
         const args = UpdateIssueOptionsSchema.parse(request.params.arguments);
         const { owner, repo, issue_number, ...options } = args;
-        const issue = await updateIssue(owner, repo, issue_number, options);
+        const issue = await updateIssue(owner, repo, issue_number, options, GITHUB_PERSONAL_ACCESS_TOKEN);
         return { toolResult: issue };
       }
 
       case "add_issue_comment": {
         const args = IssueCommentSchema.parse(request.params.arguments);
         const { owner, repo, issue_number, body } = args;
-        const comment = await addIssueComment(owner, repo, issue_number, body);
+        const comment = await addIssueComment(owner, repo, issue_number, body, GITHUB_PERSONAL_ACCESS_TOKEN);
         return { toolResult: comment };
       }
 
       case "list_commits": {
         const args = ListCommitsSchema.parse(request.params.arguments);
-        const results = await listCommits(args.owner, args.repo, args.page, args.perPage, args.sha);
+        const results = await listCommits(args.owner, args.repo, args.page, args.perPage, args.sha, GITHUB_PERSONAL_ACCESS_TOKEN);
         return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
       }
 
@@ -1018,7 +1039,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           repo: z.string(),
           issue_number: z.number()
         }).parse(request.params.arguments);
-        const issue = await getIssue(args.owner, args.repo, args.issue_number);
+        const issue = await getIssue(args.owner, args.repo, args.issue_number, GITHUB_PERSONAL_ACCESS_TOKEN);
         return { toolResult: issue };
       }
 
@@ -1044,27 +1065,42 @@ export async function runServer() {
   let transport: SSEServerTransport;
 
   app.get("/sse", async (req, res) => {
+
     console.log("--> Received connection:", req.url);
+
+    // 从查询参数中提取 token
+    const token = req.query.token;
+    if (typeof token !== 'string') {
+      res.status(400).send("Missing or invalid 'token' query parameter");
+      return;
+    }
+
     transport = new SSEServerTransport("/message", res);
+    (transport as any).githubToken = token;
+
     console.log("New SSE connection.");
     await server.connect(transport);
+
     const _onMsg = transport.onmessage; // original hook
     const _onClose = transport.onclose;
     const _onErr = transport.onerror;
+
     transport.onmessage = (msg: JSONRPCMessage) => {
       console.log(msg);
       if (_onMsg) _onMsg(msg);
     };
+
     transport.onclose = () => {
       console.log("Transport closed.");
       if (_onClose) _onClose();
     };
+
     transport.onerror = (err) => {
       console.error(err);
       if (_onErr) _onErr(err);
     };
+
     server.onclose = async () => {
-      //clearInterval(updateInterval);
       await server.close();
       console.log("SSE connection closed.");
     };
