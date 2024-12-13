@@ -734,6 +734,14 @@ export const createServer = () => {
         b: z.number().describe("Second number"),
     });
 
+    const LongRunningOperationSchema = z.object({
+        duration: z
+            .number()
+            .default(10)
+            .describe("Duration of the operation in seconds"),
+        steps: z.number().default(5).describe("Number of steps in the operation"),
+    });
+
     server.setRequestHandler(ListToolsRequestSchema, async () => {
         return {
             tools: [
@@ -741,6 +749,11 @@ export const createServer = () => {
                     name: "add",
                     description: "Adds two numbers",
                     inputSchema: zodToJsonSchema(AddSchema),
+                },
+                {
+                    name: "longRunningOperation",
+                    description: "Demonstrates a long running operation with progress updates",
+                    inputSchema: zodToJsonSchema(LongRunningOperationSchema),
                 },
                 {
                     name: "create_or_update_file",
