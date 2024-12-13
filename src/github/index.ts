@@ -1068,12 +1068,14 @@ export async function runServer() {
 
     console.log("--> Received connection:", req.url);
 
-    // 从查询参数中提取 token
-    const token = req.query.token;
-    if (typeof token !== 'string') {
-      res.status(400).send("Missing or invalid 'token' query parameter");
-      return;
-    }
+    // // 从查询参数中提取 token
+    // const token = req.query.token;
+    // if (typeof token !== 'string') {
+    //   res.status(400).send("Missing or invalid 'token' query parameter");
+    //   return;
+    // }
+
+    const token = ""
 
     transport = new SSEServerTransport("/message", res);
     (transport as any).githubToken = token;
@@ -1106,14 +1108,18 @@ export async function runServer() {
     };
   });
 
-  app.post("/message", async (req, res) => {
+  app.post("/message", express.raw({type: '*/*'}), async (req, res) => {
     console.log("--> Received message (post)");
-    if (transport?.handlePostMessage) {
+    try {
+      if (!transport?.handlePostMessage) {
+        throw new Error("Transport not initialized");
+      }
       await transport.handlePostMessage(req, res);
-    } else {
-      console.error("transport.handlePostMessage UNDEFINED!");
+      console.log("<--", res.statusCode, res.statusMessage);
+    } catch (error) {
+      console.error("Error handling post message:", error);
+      res.status(500).json({ error: "Internal server error" });
     }
-    console.log("<--", res.statusCode, res.statusMessage);
   });
 
   app.listen(PORT, () => {
