@@ -19,9 +19,13 @@ import uvicorn
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-SENTRY_API_BASE = "https://sentry.io/api/0/organizations/4507315210616832/"
+# 修改 SENTRY_API_BASE 为模板字符串
+SENTRY_API_BASE = "https://sentry.io/api/0/"  # 移除 organization_slug 占位符
 MISSING_AUTH_TOKEN_MESSAGE = (
     """Sentry authentication token not found. Please specify your Sentry auth token."""
+)
+MISSING_ORG_SLUG_MESSAGE = (
+    """Sentry organization slug not found. Please specify your organization slug."""
 )
 
 
@@ -149,13 +153,20 @@ def create_stacktrace(latest_event: dict) -> str:
 
 
 async def handle_sentry_issue(
-    http_client: httpx.AsyncClient, auth_token: str, issue_id_or_url: str
+    http_client: httpx.AsyncClient, 
+    auth_token: str, 
+    org_slug: str,
+    issue_id_or_url: str
 ) -> SentryIssueData:
     try:
         issue_id = extract_issue_id(issue_id_or_url)
-
+        
+        # 构建完整的 API URL
+        api_url = f"organizations/{org_slug}/issues/{issue_id}/"
+        
         response = await http_client.get(
-            f"issues/{issue_id}/", headers={"Authorization": f"Bearer {auth_token}"}
+            api_url, 
+            headers={"Authorization": f"Bearer {auth_token}"}
         )
         if response.status_code == 401:
             raise McpError(
@@ -203,17 +214,32 @@ def serve(default_auth_token: str | None = None) -> None:
     http_client = httpx.AsyncClient(base_url=SENTRY_API_BASE)
     current_auth_token = None  # 存储当前会话的 token
 
-    async def get_auth_token(request) -> str:
-        """Get auth token from request params or default value"""
+    async def get_auth_token(request) -> tuple[str, str]:
+        """Get auth token and organization slug from request"""
         nonlocal current_auth_token
+        
+        # 获取 organization_slug
+        org_slug = request.query_params.get("organization")
+        if not org_slug:
+            raise McpError(MISSING_ORG_SLUG_MESSAGE)
+        
         if current_auth_token:
-            return current_auth_token
+            return current_auth_token, org_slug
             
-        auth_token = request.query_params.get("auth_token", default_auth_token)
+        # 获取Authorization头部的值
+        auth_header = request.headers.get('Authorization', '')
+        parts = auth_header.split()
+
+        if parts[0].lower() == 'bearer' and len(parts) == 2:
+            auth_token = parts[1]
+        else:
+            auth_token = request.body.get("auth_token", "")
+
         if not auth_token:
             raise McpError(MISSING_AUTH_TOKEN_MESSAGE)
-        current_auth_token = auth_token  # 保存 token
-        return auth_token
+        
+        current_auth_token = auth_token
+        return auth_token, org_slug
 
     @app.list_prompts()
     async def handle_list_prompts() -> list[types.Prompt]:
@@ -244,7 +270,7 @@ def serve(default_auth_token: str | None = None) -> None:
             raise McpError(MISSING_AUTH_TOKEN_MESSAGE)
 
         issue_id_or_url = (arguments or {}).get("issue_id_or_url", "")
-        issue_data = await handle_sentry_issue(http_client, current_auth_token, issue_id_or_url)
+        issue_data = await handle_sentry_issue(http_client, current_auth_token, org_slug, issue_id_or_url)
         return issue_data.to_prompt_result()
 
     @app.list_tools()
@@ -289,6 +315,7 @@ def serve(default_auth_token: str | None = None) -> None:
         issue_data = await handle_sentry_issue(
             http_client, 
             current_auth_token,  # 使用当前会话的 token
+            org_slug,
             arguments["issue_id_or_url"]
         )
         return issue_data.to_tool_result()
@@ -299,8 +326,8 @@ def serve(default_auth_token: str | None = None) -> None:
     async def handle_sse(request):
         """Handle SSE connection requests"""
         try:
-            # 在 SSE 连接时获取并保存 token
-            await get_auth_token(request)
+            # 获取 token 和 organization slug
+            auth_token, org_slug = await get_auth_token(request)
             
             async with sse.connect_sse(
                 request.scope, request.receive, request._send
