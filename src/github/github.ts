@@ -729,9 +729,19 @@ export const createServer = () => {
         return GitHubIssueSchema.parse(await response.json());
     }
 
+    const AddSchema = z.object({
+        a: z.number().describe("First number"),
+        b: z.number().describe("Second number"),
+    });
+
     server.setRequestHandler(ListToolsRequestSchema, async () => {
         return {
             tools: [
+                {
+                    name: "add",
+                    description: "Adds two numbers",
+                    inputSchema: zodToJsonSchema(AddSchema),
+                },
                 {
                     name: "create_or_update_file",
                     description: "Create or update a single file in a GitHub repository",
