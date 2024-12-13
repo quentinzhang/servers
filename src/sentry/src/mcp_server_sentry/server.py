@@ -212,34 +212,42 @@ def serve(default_auth_token: str | None = None) -> None:
     """Run the Sentry MCP server with SSE transport."""
     app = Server("sentry")
     http_client = httpx.AsyncClient(base_url=SENTRY_API_BASE)
-    current_auth_token = None  # 存储当前会话的 token
+    
+    current_auth_token = None
+    current_org_slug = None  # 添加组织 slug 的存储
 
     async def get_auth_token(request) -> tuple[str, str]:
         """Get auth token and organization slug from request"""
-        nonlocal current_auth_token
+        nonlocal current_auth_token, current_org_slug  # 同时更新两个值
         
-        # 获取 organization_slug
+        # 从request中获取headers信息
+        logger.info(f"headers: {request.headers}")
+        if request.headers.get("organization"):
+            current_org_slug = request.headers.get("organization")
+        if request.headers.get("auth_token"):
+            current_auth_token = request.headers.get("auth_token")
+
         org_slug = request.query_params.get("organization")
-        if not org_slug:
-            raise McpError(MISSING_ORG_SLUG_MESSAGE)
+        if org_slug:
+            current_org_slug = org_slug
         
-        if current_auth_token:
-            return current_auth_token, org_slug
-            
-        # 获取Authorization头部的值
-        auth_header = request.headers.get('Authorization', '')
-        parts = auth_header.split()
-
-        if parts[0].lower() == 'bearer' and len(parts) == 2:
-            auth_token = parts[1]
-        else:
-            auth_token = request.body.get("auth_token", "")
-
-        if not auth_token:
+        if not current_auth_token:
             raise McpError(MISSING_AUTH_TOKEN_MESSAGE)
         
-        current_auth_token = auth_token
-        return auth_token, org_slug
+        if not current_org_slug:
+            raise McpError(MISSING_ORG_SLUG_MESSAGE)
+        
+        return current_auth_token, current_org_slug
+
+        # # 获取Authorization头部的值
+        # auth_header = request.headers.get('Authorization', '')
+        # parts = auth_header.split()
+
+        # if parts[0].lower() == 'bearer' and len(parts) == 2:
+        #     auth_token = parts[1]
+        # else:
+        #     auth_token = request.body.get("auth_token", "")
+
 
     @app.list_prompts()
     async def handle_list_prompts() -> list[types.Prompt]:
@@ -261,16 +269,21 @@ def serve(default_auth_token: str | None = None) -> None:
     async def handle_get_prompt(
         name: str, arguments: dict[str, str] | None
     ) -> types.GetPromptResult:
-        nonlocal current_auth_token  # 使用当前会话的 token
+        nonlocal current_auth_token, current_org_slug
         
         if name != "sentry-issue":
             raise ValueError(f"Unknown prompt: {name}")
 
-        if not current_auth_token:
+        if not current_auth_token or not current_org_slug:
             raise McpError(MISSING_AUTH_TOKEN_MESSAGE)
 
         issue_id_or_url = (arguments or {}).get("issue_id_or_url", "")
-        issue_data = await handle_sentry_issue(http_client, current_auth_token, org_slug, issue_id_or_url)
+        issue_data = await handle_sentry_issue(
+            http_client, 
+            current_auth_token, 
+            current_org_slug,
+            issue_id_or_url
+        )
         return issue_data.to_prompt_result()
 
     @app.list_tools()
@@ -315,7 +328,7 @@ def serve(default_auth_token: str | None = None) -> None:
         issue_data = await handle_sentry_issue(
             http_client, 
             current_auth_token,  # 使用当前会话的 token
-            org_slug,
+            current_org_slug,
             arguments["issue_id_or_url"]
         )
         return issue_data.to_tool_result()
