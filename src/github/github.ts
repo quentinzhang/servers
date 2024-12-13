@@ -73,6 +73,14 @@ export const createServer = () => {
         }
     );
 
+    let currentTransport: any = null;
+
+    const originalConnect = server.connect.bind(server);
+    server.connect = async (transport: any) => {
+        currentTransport = transport;
+        return await originalConnect(transport);
+    };
+
     async function forkRepository(
         owner: string,
         repo: string,
@@ -848,14 +856,15 @@ export const createServer = () => {
         };
     });
 
-    server.setRequestHandler(CallToolRequestSchema, async (request, transport: any) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
         try {
             if (!request.params.arguments) {
                 throw new Error("Arguments are required");
             }
+            console.log("currentTransport?.githubToken:", currentTransport?.githubToken);
 
             // 获取当前连接的 GitHub 令牌
-            const GITHUB_PERSONAL_ACCESS_TOKEN = transport?.githubToken;
+            const GITHUB_PERSONAL_ACCESS_TOKEN = currentTransport?.githubToken;
             if (!GITHUB_PERSONAL_ACCESS_TOKEN) {
                 throw new Error("GitHub token is not provided");
             }

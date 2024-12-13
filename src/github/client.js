@@ -33,9 +33,15 @@ const sendRequest = async () => {
 
     // 发送 ListTools 请求
     const request = {
-        jsonrpc: "2.0",
-        method: "listTools",
-        params: {},
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: {
+            name: 'add',
+            arguments: {
+                a: 5,
+                b: 3
+            }
+        },
         id: 1
     };
 
@@ -45,8 +51,8 @@ const sendRequest = async () => {
                 'Content-Type': 'application/json'
             }
         });
-        console.log('请求成功:', response);
-        
+        console.log("请求成功", response.data)
+
     } catch (error) {
         console.error('请求错误:', error.response ? error.response.data : error.message);
     } finally {

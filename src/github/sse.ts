@@ -1,8 +1,11 @@
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
+import cors from 'cors';
 import { createServer } from "./github.js";
 
 const app = express();
+
+app.use(cors());
 
 const { server } = createServer();
 
@@ -13,17 +16,21 @@ app.get("/sse", async (req, res) => {
 
   transport = new SSEServerTransport("/message", res);
 
+  console.log("Query params:", req.query);
+
   // 获取 token 并传递给 transport
   const token = req.query.token as string;
   (transport as any).githubToken = token;
 
+  console.log("Token set:", token);
+
   await server.connect(transport);
   console.log("SSE 连接已建立");
-
+  
 });
 
 app.post("/message", async (req, res) => {
-  console.log("收到 POST 请求:", req.body);
+  console.log("收到 POST 请求体:");
 
   try {
     if (!transport) {
