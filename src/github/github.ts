@@ -860,7 +860,52 @@ export const createServer = () => {
                 throw new Error("GitHub token is not provided");
             }
 
-            switch (request.params.name) {
+            const { name, arguments: args } = request.params;
+            switch (name) {
+                case "add": {
+                    const validatedArgs = AddSchema.parse(args);
+                    const sum = validatedArgs.a + validatedArgs.b;
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `The sum of ${validatedArgs.a} and ${validatedArgs.b} is ${sum}.`,
+                            },
+                        ],
+                    };
+                }
+                case "longRunningOperation": {
+                    const validatedArgs = LongRunningOperationSchema.parse(args);
+                    const { duration, steps } = validatedArgs;
+                    const stepDuration = duration / steps;
+                    const progressToken = request.params._meta?.progressToken;
+
+                    for (let i = 1; i < steps + 1; i++) {
+                        await new Promise((resolve) =>
+                            setTimeout(resolve, stepDuration * 1000),
+                        );
+
+                        if (progressToken !== undefined) {
+                            await server.notification({
+                                method: "notifications/progress",
+                                params: {
+                                    progress: i,
+                                    total: steps,
+                                    progressToken,
+                                },
+                            });
+                        }
+                    }
+
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `Long running operation completed. Duration: ${duration} seconds, Steps: ${steps}.`,
+                            },
+                        ],
+                    };
+                }
                 case "fork_repository": {
                     const args = ForkRepositorySchema.parse(request.params.arguments);
                     const fork = await forkRepository(
