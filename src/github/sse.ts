@@ -20,11 +20,6 @@ app.get("/sse", async (req, res) => {
   await server.connect(transport);
   console.log("SSE 连接已建立");
 
-  server.onclose = async () => {
-    console.log("客户端断开连接");
-    await server.close();
-    process.exit(0);
-  };
 });
 
 app.post("/message", async (req, res) => {
