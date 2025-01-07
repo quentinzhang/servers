@@ -19,8 +19,8 @@
     "watch": "tsc --watch"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.1",
-    "@types/node": "^20.11.0",
+    "@modelcontextprotocol/sdk": "1.0.1",
+    "@types/node": "^22",
     "@types/node-fetch": "^2.6.12",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
