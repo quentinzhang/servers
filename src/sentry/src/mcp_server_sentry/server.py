@@ -140,13 +140,17 @@ def create_stacktrace(latest_event: dict) -> str:
 
 
 async def handle_sentry_issue(
-    http_client: httpx.AsyncClient, auth_token: str, issue_id_or_url: str
+    http_client: httpx.AsyncClient, 
+    auth_token: str, 
+    organization_id: str,
+    issue_id_or_url: str
 ) -> SentryIssueData:
     try:
         issue_id = extract_issue_id(issue_id_or_url)
 
         response = await http_client.get(
-            f"issues/{issue_id}/", headers={"Authorization": f"Bearer {auth_token}"}
+            f"organizations/{organization_id}/issues/{issue_id}/", 
+            headers={"Authorization": f"Bearer {auth_token}"}
         )
         if response.status_code == 401:
             raise McpError(
@@ -155,9 +159,8 @@ async def handle_sentry_issue(
         response.raise_for_status()
         issue_data = response.json()
 
-        # Get issue hashes
         hashes_response = await http_client.get(
-            f"issues/{issue_id}/hashes/",
+            f"organizations/{organization_id}/issues/{issue_id}/hashes/",
             headers={"Authorization": f"Bearer {auth_token}"},
         )
         hashes_response.raise_for_status()
@@ -188,7 +191,7 @@ async def handle_sentry_issue(
         raise McpError(f"An error occurred: {str(e)}")
 
 
-async def serve(auth_token: str) -> Server:
+async def serve(auth_token: str, organization_id: str) -> Server:
     server = Server("sentry")
     http_client = httpx.AsyncClient(base_url=SENTRY_API_BASE)
 
@@ -216,7 +219,7 @@ async def serve(auth_token: str) -> Server:
             raise ValueError(f"Unknown prompt: {name}")
 
         issue_id_or_url = (arguments or {}).get("issue_id_or_url", "")
-        issue_data = await handle_sentry_issue(http_client, auth_token, issue_id_or_url)
+        issue_data = await handle_sentry_issue(http_client, auth_token, organization_id, issue_id_or_url)
         return issue_data.to_prompt_result()
 
     @server.list_tools()
@@ -253,7 +256,12 @@ async def serve(auth_token: str) -> Server:
         if not arguments or "issue_id_or_url" not in arguments:
             raise ValueError("Missing issue_id_or_url argument")
 
-        issue_data = await handle_sentry_issue(http_client, auth_token, arguments["issue_id_or_url"])
+        issue_data = await handle_sentry_issue(
+            http_client, 
+            auth_token, 
+            organization_id,
+            arguments["issue_id_or_url"]
+        )
         return issue_data.to_tool_result()
 
     return server
@@ -265,10 +273,16 @@ async def serve(auth_token: str) -> Server:
     required=True,
     help="Sentry authentication token",
 )
-def main(auth_token: str):
+@click.option(
+    "--organization-id",
+    envvar="SENTRY_ORGANIZATION_ID",
+    required=True,
+    help="Sentry organization ID",
+)
+def main(auth_token: str, organization_id: str):
     async def _run():
         async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-            server = await serve(auth_token)
+            server = await serve(auth_token, organization_id)
             await server.run(
                 read_stream,
                 write_stream,
